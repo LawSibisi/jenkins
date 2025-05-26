@@ -148,6 +148,6 @@ axes.values().combinations {
               trendChartType: 'TOOLS_ONLY',
               qualityGates: [[threshold: 1, type: 'NEW', unstable: true]]])
             recordIssues([tool: checkStyle(pattern: '**/target/checkstyle-result.xml'),
-              sourceCodeEncoding: '
+              sourceCodeEncoding: 'UTF-8',
 ::contentReference[oaicite:0]{index=0}
  
