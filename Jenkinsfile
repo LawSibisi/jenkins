@@ -149,5 +149,6 @@ axes.values().combinations {
               qualityGates: [[threshold: 1, type: 'NEW', unstable: true]]])
             recordIssues([tool: checkStyle(pattern: '**/target/checkstyle-result.xml'),
               sourceCodeEncoding: 'UTF-8',
-::contentReference[oaicite:0]{index=0}
+
+skipBlames: true
  
