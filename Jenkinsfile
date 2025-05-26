@@ -1,10 +1,5 @@
 #!/usr/bin/env groovy
 
-/*
- * This Jenkinsfile is intended to run on https://ci.jenkins.io and may fail anywhere else.
- * It makes assumptions about plugins being installed, labels mapping to nodes that can build what is needed, etc.
- */
-
 def failFast = false
 
 properties([
@@ -18,17 +13,11 @@ def axes = [
 ]
 
 stage('Record build') {
-  retry(conditions: [kubernetesAgent(handleNonKubernetes: true), nonresumable()], count: 2) {
+  retry(count: 2, conditions: [kubernetesAgent(handleNonKubernetes: true), nonresumable()]) {
     node('maven-17') {
       infra.checkoutSCM()
 
-      /*
-       * Record the primary build for this CI job.
-       */
       withCredentials([string(credentialsId: 'launchable-jenkins-jenkins', variable: 'LAUNCHABLE_TOKEN')]) {
-        /*
-         * TODO Add the commits of the transitive closure of the Jenkins WAR under test to this build.
-         */
         sh 'launchable verify && launchable record build --name ${BUILD_TAG} --source jenkinsci/jenkins=.'
         axes.values().combinations {
           def (platform, jdk) = it
@@ -41,9 +30,6 @@ stage('Record build') {
         }
       }
 
-      /*
-       * Record commits for use in downstream CI jobs that may consume this artifact.
-       */
       withCredentials([string(credentialsId: 'launchable-jenkins-acceptance-test-harness', variable: 'LAUNCHABLE_TOKEN')]) {
         sh 'launchable verify && launchable record commit'
       }
@@ -62,15 +48,12 @@ axes.values().combinations {
     return // unnecessary use of hardware
   }
   builds["${platform}-jdk${jdk}"] = {
-    // see https://github.com/jenkins-infra/documentation/blob/master/ci.adoc#node-labels for information on what node types are available
     def agentContainerLabel = 'maven-' + jdk
     if (platform == 'windows') {
       agentContainerLabel += '-windows'
     }
-    retry(conditions: [kubernetesAgent(handleNonKubernetes: true), nonresumable()], count: 2) {
+    retry(count: 2, conditions: [kubernetesAgent(handleNonKubernetes: true), nonresumable()]) {
       node(agentContainerLabel) {
-        // First stage is actually checking out the source. Since we're using Multibranch
-        // currently, we can use "checkout scm".
         stage("${platform.capitalize()} - JDK ${jdk} - Checkout") {
           infra.checkoutSCM()
         }
@@ -80,7 +63,6 @@ axes.values().combinations {
         def m2repo = "${tmpDir}/m2repo"
         def session
 
-        // Now run the actual build.
         stage("${platform.capitalize()} - JDK ${jdk} - Build / Test") {
           timeout(time: 6, unit: 'HOURS') {
             dir(tmpDir) {
@@ -129,10 +111,8 @@ axes.values().combinations {
           }
         }
 
-        // Once we've built, archive the artifacts and the test results.
         stage("${platform.capitalize()} - JDK ${jdk} - Publish") {
           archiveArtifacts allowEmptyArchive: true, artifacts: '**/target/surefire-reports/*.dumpstream'
-          // cli and war have been migrated to JUnit 5
           if (failFast && currentBuild.result == 'UNSTABLE') {
             error 'There were test failures; halting early'
           }
@@ -168,81 +148,6 @@ axes.values().combinations {
               trendChartType: 'TOOLS_ONLY',
               qualityGates: [[threshold: 1, type: 'NEW', unstable: true]]])
             recordIssues([tool: checkStyle(pattern: '**/target/checkstyle-result.xml'),
-              sourceCodeEncoding: 'UTF-8',
-              skipBlames: true,
-              trendChartType: 'TOOLS_ONLY',
-              qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]]])
-            recordIssues([tool: esLint(pattern: '**/target/eslint-warnings.xml'),
-              sourceCodeEncoding: 'UTF-8',
-              skipBlames: true,
-              trendChartType: 'TOOLS_ONLY',
-              qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]]])
-            recordIssues([tool: styleLint(pattern: '**/target/stylelint-warnings.xml'),
-              sourceCodeEncoding: 'UTF-8',
-              skipBlames: true,
-              trendChartType: 'TOOLS_ONLY',
-              qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]]])
-            if (failFast && currentBuild.result == 'UNSTABLE') {
-              error 'Static analysis quality gates not passed; halting early'
-            }
-            def changelist = readFile(changelistF)
-            dir(m2repo) {
-              archiveArtifacts(
-                  artifacts: "**/*$changelist/*$changelist*",
-                  excludes: '**/*.lastUpdated,**/jenkins-coverage*/,**/jenkins-test*/',
-                  allowEmptyArchive: true, // in case we forgot to reincrementalify
-                  fingerprint: true
-                  )
-            }
-          }
-          withCredentials([string(credentialsId: 'launchable-jenkins-jenkins', variable: 'LAUNCHABLE_TOKEN')]) {
-            if (isUnix()) {
-              sh "launchable verify && launchable record tests --session ${session} --flavor platform=${platform} --flavor jdk=${jdk} maven './**/target/surefire-reports'"
-            } else {
-              bat "launchable verify && launchable record tests --session ${session} --flavor platform=${platform} --flavor jdk=${jdk} maven ./**/target/surefire-reports"
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-def athAxes = [
-  platforms: ['linux'],
-  jdks: [17],
-  browsers: ['firefox'],
-]
-athAxes.values().combinations {
-  def (platform, jdk, browser) = it
-  builds["ath-${platform}-jdk${jdk}-${browser}"] = {
-    retry(conditions: [agent(), nonresumable()], count: 2) {
-      node('docker-highmem') {
-        // Just to be safe
-        deleteDir()
-        checkout scm
-
-        withChecks(name: 'Tests', includeStage: true) {
-          infra.withArtifactCachingProxy {
-            sh "bash ath.sh ${jdk} ${browser}"
-          }
-          junit testResults: 'target/ath-reports/TEST-*.xml', testDataPublishers: [[$class: 'AttachmentPublisher']]
-        }
-        /*
-         * Currently disabled, as the fact that this is a manually created subset will confuse Launchable,
-         * which expects this to be a full build. When we implement subsetting, this can be re-enabled using
-         * Launchable's subset rather than our own.
-         */
-        /*
-         withCredentials([string(credentialsId: 'launchable-jenkins-acceptance-test-harness', variable: 'LAUNCHABLE_TOKEN')]) {
-         sh "launchable verify && launchable record tests --no-build --flavor platform=${platform} --flavor jdk=${jdk} --flavor browser=${browser} maven './target/ath-reports'"
-         }
-         */
-      }
-    }
-  }
-}
-
-builds.failFast = failFast
-parallel builds
-infra.maybePublishIncrementals()
+              sourceCodeEncoding: '
+::contentReference[oaicite:0]{index=0}
+ 
