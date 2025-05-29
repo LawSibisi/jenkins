@@ -15,8 +15,7 @@ def axes = [
 stage('Record build') {
   retry(count: 2) {  // removed kubernetesAgent
     node('maven-17') {
-      infra.checkoutSCM()
-
+    
       withCredentials([string(credentialsId: 'launchable-jenkins-jenkins', variable: 'LAUNCHABLE_TOKEN')]) {
         sh 'launchable verify && launchable record build --name ${BUILD_TAG} --source jenkinsci/jenkins=.'
         axes.values().combinations {
